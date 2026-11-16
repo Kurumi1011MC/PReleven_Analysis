@@ -200,9 +200,15 @@
     state.map=map;state.dynamic=node('g',{'data-layer':'live'});
   }
   function recentEvents(t,windowMs){const events=state.match.timeline;let lo=0,hi=events.length;while(lo<hi){const mid=(lo+hi)>>1;if(events[mid].match_ms<=t)lo=mid+1;else hi=mid;}let first=lo;while(first>0&&events[first-1].match_ms>=t-windowMs)first--;return events.slice(first,lo);}
-  function activeKickOption(events,options,now){
-    const kick=events.slice().reverse().find(e=>e.type==='kick'&&e.match_ms<=now);
-    if(!kick||now-kick.match_ms>1600)return null;
+  function activeKickOption(events,options,now,selected){
+    // A selected kick at its own timestamp takes precedence over a preview.
+    if(selected?.type==='kick'&&selected.match_ms===now)
+      return options.find(option=>option.event_id===selected.event_id)||null;
+    const previous=events.slice().reverse().find(e=>e.type==='kick'&&e.match_ms<=now);
+    const upcoming=events.find(e=>e.type==='kick'&&e.match_ms>now&&e.match_ms-now<=2000);
+    // Briefly keep a just-taken kick on screen; then preview the next kick.
+    const kick=previous&&now-previous.match_ms<=250?previous:upcoming||(previous&&now-previous.match_ms<=1600?previous:null);
+    if(!kick)return null;
     return options.find(option=>option.event_id===kick.event_id)||null;
   }
   function renderPossessionState(){
@@ -413,9 +419,9 @@
     if(ballPosition){const [x,y]=map(ballPosition.x,ballPosition.z),stale=ballPosition.position_source==='last_known',wide=ballPosition.position_source==='interpolated_wide';ballVisible=true;const ball=node('g',{'aria-label':stale?'ボールの最終観測位置':wide?'ボールの推定位置':'ボール',opacity:1});const title=node('title',{},ball);title.textContent=stale?'ボールの最終観測位置（現在位置は不明）':wide?'ボールの推定位置（250〜750msの間を補間）':'ボール';drawShotFlame(ballPosition,x,y,ball);node('circle',{cx:x,cy:y,r:10,fill:'#f9fbf7',stroke:'#1d2920','stroke-width':1.4},ball);node('polygon',{points:`${x},${y-5} ${x+5},${y-1} ${x+3},${y+5} ${x-3},${y+5} ${x-5},${y-1}`,fill:'#26312a'},ball);for(let a=0;a<5;a++){const angle=(a*72-90)*Math.PI/180;node('line',{x1:x+Math.cos(angle)*5,y1:y+Math.sin(angle)*5,x2:x+Math.cos(angle)*9,y2:y+Math.sin(angle)*9,stroke:'#26312a','stroke-width':1},ball);}}
     const goal=state.recentEvents.filter(e=>e.type==='goal'&&state.time>=e.match_ms&&state.time-e.match_ms<=2200).sort((a,b)=>b.match_ms-a.match_ms)[0];if(goal&&checked('show-goal-effects')){const label=node('g',{'aria-label':`得点 ${goal.actor||'得点者不明'}`});node('rect',{x:378,y:18,width:204,height:48,rx:8,fill:'#17261e',stroke:'#ffe08a','stroke-width':2},label);text(480,39,'GOAL',{'text-anchor':'middle','font-size':18,'font-weight':700,'letter-spacing':4,fill:'#ffe08a'},label);text(480,56,goal.actor||team(goal.team),{'text-anchor':'middle','font-size':12,fill:'#f5f6ed'},label);}
     if(checked('show-best-kick')){
-      // Use the most recent kick itself, even when it has no evaluation: this
-      // prevents a previous kick's prediction leaking into a later play.
-      const option=activeKickOption(state.recentEvents,match.analysis?.kick_options?.kicks||[],state.time);
+      // Pick the actual next/previous kick before looking up its evaluation;
+      // an unanalysed kick must not inherit another kick's prediction.
+      const option=activeKickOption(match.timeline,match.analysis?.kick_options?.kicks||[],state.time,state.event);
       if(option){
         const previousLayer=drawingLayer;drawingLayer=node('g',{'data-layer':'kick-options','pointer-events':'none'});
         const drawOption=(entry,color,dashed,label,offset)=>{
@@ -434,6 +440,7 @@
         drawOption(option.actual,'#ffffff',true,'\u5b9f\u30ad\u30c3\u30af\u8fd1\u4f3c',32);
         drawOption(option.worst,'#ff7777',true,'\u6700\u60aa\u5019\u88dc',50);
         drawOption(option.best,'#ffe16b',false,'\u6700\u826f\u5019\u88dc',-12);
+        if(option.match_ms>state.time)text(480,70,`\u6b21\u306e\u30ad\u30c3\u30af\u307e\u3067 ${((option.match_ms-state.time)/1000).toFixed(1)}\u79d2`,{'text-anchor':'middle','font-size':14,fill:'#fff','font-weight':700,stroke:'#15231d','stroke-width':3,'paint-order':'stroke'});
         drawingLayer=previousLayer;
       }
     }
