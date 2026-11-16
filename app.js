@@ -200,6 +200,11 @@
     state.map=map;state.dynamic=node('g',{'data-layer':'live'});
   }
   function recentEvents(t,windowMs){const events=state.match.timeline;let lo=0,hi=events.length;while(lo<hi){const mid=(lo+hi)>>1;if(events[mid].match_ms<=t)lo=mid+1;else hi=mid;}let first=lo;while(first>0&&events[first-1].match_ms>=t-windowMs)first--;return events.slice(first,lo);}
+  function activeKickOption(events,options,now){
+    const kick=events.slice().reverse().find(e=>e.type==='kick'&&e.match_ms<=now);
+    if(!kick||now-kick.match_ms>1600)return null;
+    return options.find(option=>option.event_id===kick.event_id)||null;
+  }
   function renderPossessionState(){
     const node=$('#possession-state');
     if(state.match.analysis_status!=='computed'){node.textContent='\u5de5\u7a0b3\u306e\u8a66\u5408\u5206\u6790\uff1a\u672a\u7b97\u51fa\uff08\u652f\u914d\u30fb\u596a\u53d6\u30fb\u88ab\u596a\u53d6\u30fb\u7a81\u7834\u5019\u88dc\u306f\u307e\u3060\u96c6\u8a08\u3057\u3066\u3044\u307e\u305b\u3093\uff09';return;}
@@ -376,7 +381,8 @@
     const feed=state.recentEvents.filter(e=>['kick','goal','body_block','foul','foul_candidate','foul_notification','forced_foul','ball_recovery','possession_gain_candidate','possession_loss_candidate','breakthrough_candidate','goal_link_candidate','goal_outcome','shot_candidate','pass_success','progressive_pass_candidate','key_pass_candidate','assist_candidate','big_chance_candidate','chance_creation_candidate','dribble_success_candidate','interception_candidate'].includes(e.type)).slice(-4),feedKey=feed.map(e=>e.event_id).join('|');
     if(state.feedKey!==feedKey){state.feedKey=feedKey;$('#pitch-feed').innerHTML=feed.flatMap(e=>{const foul=['foul','foul_candidate'].includes(e.type),shownTeam=displayTeam(e);if(foul){const pushed=e.details?.raw?.push_foul_success===true,playerId=pushed?`forced_foul:${e.event_id}`:e.event_id,player=e.actor?`<button data-event="${esc(playerId)}" class="feed-line ${esc(pushed?'forced_foul':e.type)}"><time>${clock(e.match_ms,false)}</time> <b class="${esc(e.team||'')}">${esc(e.actor)}</b> ${pushed?'ファウル押し付け成功':'ファウル'}</button>`:'';return [player,`<button data-event="${esc(e.event_id)}" class="feed-line ${esc(e.type)}"><time>${clock(e.match_ms,false)}</time> ${eventLabelHtml(e)}</button>`].filter(Boolean);}const label=e.type==='goal'?'ゴール！':esc(eventLabel(e)),person=e.actor||(shownTeam?team(shownTeam):'');return [`<button data-event="${esc(e.event_id)}" class="feed-line ${esc(e.type)}"><time>${clock(e.match_ms,false)}</time> <b class="${esc(shownTeam||playerByName(e.actor)?.team||'')}">${esc(person)}</b> ${label}</button>`];}).join('');}
     $('#pitch-feed').hidden=!checked('show-feed');
-    const svg=$('#pitch');
+    const svg=$('#pitch'),overlay=$('#kick-option-overlay');
+    overlay.replaceChildren();
     if(!state.loaded||!Number.isFinite(state.bounds?.[0])){drawingLayer=null;svg.replaceChildren();text(480,270,state.loaded?'この区間の位置データはありません':'追跡データを読み込んでいます',{'text-anchor':'middle',fill:'#a8bbaa','font-size':16});return;}
     if(!state.map)preparePitch();drawingLayer=state.dynamic;drawingLayer.replaceChildren();const map=state.map;
     const current=state.match.timeline.filter(e=>e.match_ms<=state.time).at(-1);
@@ -404,9 +410,13 @@
       if(canReuse)for(let i=0;i<cache.paths.length;i++)if(cache.paths[i]){const color=cache.teams[i]==='red'?'#ef827e':'#7cb8ec';node('path',{d:cache.paths[i],fill:color,'fill-opacity':cache.uncertain ? 0.08 : 0.16,stroke:color,'stroke-width':1.5,'stroke-dasharray':cache.uncertain?'4 3':'','stroke-linecap':'round','stroke-linejoin':'round','clip-path':'url(#territory-field-clip)'});}
     }
     if(checked('show-best-kick')){
-      const chosen=state.event?.type==='kick'?state.event:null;
-      const option=chosen&&(match.analysis?.kick_options?.kicks||[]).find(k=>k.event_id===chosen.event_id);
-      if(option && Math.abs(state.time-option.match_ms)<=250){
+      // Use the most recent kick itself, even when it has no evaluation: this
+      // prevents a previous kick's prediction leaking into a later play.
+      const option=activeKickOption(state.recentEvents,match.analysis?.kick_options?.kicks||[],state.time);
+      if(option){
+        overlay.style.left=`${svg.offsetLeft}px`;overlay.style.top=`${svg.offsetTop}px`;
+        overlay.style.width=`${svg.clientWidth}px`;overlay.style.height=`${svg.clientHeight}px`;
+        const previousLayer=drawingLayer;drawingLayer=overlay;
         const drawOption=(entry,color,dashed,label)=>{
           if(!entry)return;
           const points=(entry.path?.length?entry.path:[entry.origin,entry.end]).map(p=>map(p.x,p.z).join(',')).join(' ');
@@ -414,14 +424,15 @@
           node('polyline',{points,fill:'none',stroke:color,'stroke-width':4,'stroke-dasharray':dashed?'8 6':'','stroke-linecap':'round','stroke-linejoin':'round'});
           node('circle',{cx:x2,cy:y2,r:9,fill:'none',stroke:color,'stroke-width':3});
           const value=entry.score==null?'\u4e0d\u660e':Number(entry.score).toFixed(1);
-          text(x2,y2-(dashed?25:12),`${label} ${value}`,{'text-anchor':'middle','font-size':13,fill:color,'font-weight':700,stroke:'#15231d','stroke-width':3,'paint-order':'stroke'});
+          const labelX=Math.max(90,Math.min(870,x2)),labelY=Math.max(16,Math.min(526,y2+(dashed?32:-12)));
+          text(labelX,labelY,`${label} ${value}`,{'text-anchor':'middle','font-size':13,fill:color,'font-weight':700,stroke:'#15231d','stroke-width':3,'paint-order':'stroke'});
           if(entry.block?.point){const [bx,by]=map(entry.block.point.x,entry.block.point.z);node('circle',{cx:bx,cy:by,r:7,fill:'#f59f39',stroke:'#fff','stroke-width':2});}
         };
+        for(const p of option.best.projected_players||[]){const [px,py]=map(p.position.x,p.position.z);node('circle',{cx:px,cy:py,r:15,fill:'none',stroke:p.team==='red'?'#ff8888':'#8ac8ff','stroke-width':2,'stroke-dasharray':'4 3'});const player=state.playerMap.get(p.participant_id);if(player)text(px,py+27,player.username+' \u4e88\u6e2c',{'text-anchor':'middle','font-size':10,fill:'#fff'});}
+        if(option.actual_observed?.ball_position){const [ox,oy]=map(option.actual_observed.ball_position.x,option.actual_observed.ball_position.z);node('circle',{cx:ox,cy:oy,r:6,fill:'#70edb2',stroke:'#123b2d','stroke-width':2});const ov=option.actual_observed.score==null?'\u4e0d\u660e':Number(option.actual_observed.score).toFixed(1);text(ox,oy+19,`\u5b9f\u6e2c ${ov}`,{'text-anchor':'middle','font-size':12,fill:'#70edb2',stroke:'#15231d','stroke-width':3,'paint-order':'stroke'});}
         drawOption(option.actual,'#ffffff',true,'\u5b9f\u30ad\u30c3\u30af\u8fd1\u4f3c');
         drawOption(option.best,'#ffe16b',false,'\u6700\u826f\u5019\u88dc');
-        if(option.actual_observed?.ball_position){const [ox,oy]=map(option.actual_observed.ball_position.x,option.actual_observed.ball_position.z);node('circle',{cx:ox,cy:oy,r:6,fill:'#70edb2',stroke:'#123b2d','stroke-width':2});const ov=option.actual_observed.score==null?'\u4e0d\u660e':Number(option.actual_observed.score).toFixed(1);text(ox,oy+19,`\u5b9f\u6e2c ${ov}`,{'text-anchor':'middle','font-size':12,fill:'#70edb2',stroke:'#15231d','stroke-width':3,'paint-order':'stroke'});}
-
-        for(const p of option.best.projected_players||[]){const [px,py]=map(p.position.x,p.position.z);node('circle',{cx:px,cy:py,r:15,fill:'none',stroke:p.team==='red'?'#ff8888':'#8ac8ff','stroke-width':2,'stroke-dasharray':'4 3'});const player=state.playerMap.get(p.participant_id);if(player)text(px,py+27,player.username+' \u4e88\u6e2c',{'text-anchor':'middle','font-size':10,fill:'#fff'});}
+        drawingLayer=previousLayer;
       }
     }
     const playerEventAnnotations=collectEventAnnotations();
