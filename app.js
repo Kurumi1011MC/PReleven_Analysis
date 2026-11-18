@@ -4,6 +4,8 @@
   const stage=Number(window.PR11_SITE_STAGE||3), stage2=stage===2;
   const matches=[...(window.PR11_SITE_DATA||[])].sort((a,b)=>String(b.match_date||'').localeCompare(String(a.match_date||'')));
   let profileData=window.PR11_PROFILE_DATA||null;
+  let playerStatistics=window.PR11_PLAYER_STATISTICS||null;
+  let playerStatisticsPromise=null;
   const profileDataUrl=window.PR11_PROFILE_DATA_URL||null;
   const HISTORY_PRIOR_ATTEMPTS=20;
   let playerHistory=stage2?[]:profileData?buildArtifactPlayerHistory(profileData,matches):[];
@@ -22,7 +24,7 @@
   const type=t=>({kick:'\u30ad\u30c3\u30af\u5019\u88dc',goal:'\u5f97\u70b9',body_block:'\u4f53\u30d6\u30ed\u30c3\u30af\u5019\u88dc',foul:'\u30d5\u30a1\u30a6\u30eb',foul_candidate:'\u30d5\u30a1\u30a6\u30eb',foul_notification:'\u30d5\u30a1\u30a6\u30eb\u901a\u77e5\uff08\u5bfe\u8c61\u672a\u78ba\u5b9a\uff09',forced_foul:'\u30d5\u30a1\u30a6\u30eb\u62bc\u3057\u4ed8\u3051\u5019\u88dc',ball_recovery:'\u30dc\u30fc\u30eb\u596a\u53d6\u5019\u88dc',possession_loss_candidate:'\u30dc\u30fc\u30eb\u88ab\u596a\u53d6\u5019\u88dc',breakthrough_candidate:'\u7a81\u7834\u5019\u88dc',goal_link_candidate:'\u5f97\u70b9\u3068\u306e\u95a2\u9023\u5019\u88dc',goal_outcome:'\u5f97\u70b9\u7d50\u679c',phase_change:'\u8a66\u5408\u30d5\u30a7\u30fc\u30ba',match_start:'\u8a66\u5408\u958b\u59cb',match_end:'\u8a66\u5408\u7d42\u4e86'}[t]||'\u30a4\u30d9\u30f3\u30c8');
   const symbol=t=>t==='goal'?'\u2605':t==='body_block'?'\u25c7':t==='kick'?'\u2197':t==='ball_recovery'?'\u21ba':t==='possession_loss_candidate'?'\u21c6':t==='breakthrough_candidate'?'\u2197':t==='forced_foul'?'!':'\xb7';
   const KICK_ATTRIBUTE_LABELS={pass_success:'パス成功',pass_failure:'パス失敗',key_pass_candidate:'キーパス',progressive_pass_candidate:'前進パス',chance_creation_candidate:'チャンスメイク',assist_candidate:'アシスト',interception_candidate:'インターセプト',possession_gain_candidate:'奪取'};
-  const kickAttributes=e=>{const attrs=Array.isArray(e?.details?.raw?.kick_attributes)?e.details.raw.kick_attributes:[];const intent=kickClassification(e);if(!intent||!['pass-intent.v6','pass-intent.v7','pass-intent.v8','pass-intent.v9'].includes(state.match?.analysis?.pass_intent?.definition_version)||e.type!=='kick')return attrs;const pass=intent.classification==='pass_attempt',success=pass&&intent.outcome==='teammate_next_kick',failure=pass&&intent.outcome==='opponent_next_kick';const metric=state.match?.analysis?.pass_metrics?.passes?.find(p=>p.event_id===e.event_id);const keys=new Set(['pass_success','pass_failure','progressive_pass_candidate','key_pass_candidate','assist_candidate']);const filtered=attrs.filter(a=>!keys.has(a.type)||(success&&a.type!=='pass_success'&&a.type!=='pass_failure'&&(a.type!=='key_pass_candidate'||metric?.key_pass)));const next=(state.match?.timeline||[]).find(k=>k.event_id===intent.next_kick_event_id);if(success||failure)filtered.push({type:success?'pass_success':'pass_failure',actor_id:e.actor_id,effect_match_ms:next?.match_ms??Infinity});if(success&&metric?.key_pass&&!filtered.some(a=>a.type==='key_pass_candidate'))filtered.push({type:'key_pass_candidate',actor_id:e.actor_id,effect_match_ms:e.match_ms});return filtered;};
+  const kickAttributes=e=>{const attrs=Array.isArray(e?.details?.raw?.kick_attributes)?e.details.raw.kick_attributes:[];const intent=kickClassification(e);if(!intent||!['pass-intent.v6','pass-intent.v7','pass-intent.v8','pass-intent.v9','pass-intent.v10'].includes(state.match?.analysis?.pass_intent?.definition_version)||e.type!=='kick')return attrs;const pass=intent.classification==='pass_attempt',success=pass&&intent.outcome==='teammate_next_kick',failure=pass&&intent.outcome==='opponent_next_kick';const metric=state.match?.analysis?.pass_metrics?.passes?.find(p=>p.event_id===e.event_id);const keys=new Set(['pass_success','pass_failure','progressive_pass_candidate','key_pass_candidate','assist_candidate']);const filtered=attrs.filter(a=>!keys.has(a.type)||(success&&a.type!=='pass_success'&&a.type!=='pass_failure'&&(a.type!=='key_pass_candidate'||metric?.key_pass)));const next=(state.match?.timeline||[]).find(k=>k.event_id===intent.next_kick_event_id);if(success||failure)filtered.push({type:success?'pass_success':'pass_failure',actor_id:e.actor_id,effect_match_ms:next?.match_ms??Infinity});if(success&&metric?.key_pass&&!filtered.some(a=>a.type==='key_pass_candidate'))filtered.push({type:'key_pass_candidate',actor_id:e.actor_id,effect_match_ms:e.match_ms});return filtered;};
   const kickClassification=e=>(state.match?.analysis?.pass_intent?.kicks||[]).find(k=>k.event_id===e.event_id);
   const kickKind=e=>({pass_attempt:'\u30d1\u30b9',shot_attempt:'\u30b7\u30e5\u30fc\u30c8',self_carry_candidate:'\u30c9\u30ea\u30d6\u30eb',unknown:'\u5206\u985e\u4fdd\u7559'}[kickClassification(e)?.classification]||'\u5206\u985e\u672a\u7b97\u51fa');
   const kickLabel=e=>{const base=({weak:'弱キック',medium:'中キック',strong:'強キック'}[e.kick_strength]||'キック（強さ不明）');const attrs=[...new Set(kickAttributes(e).map(a=>KICK_ATTRIBUTE_LABELS[a.type]).filter(Boolean))];const intent=kickClassification(e);if(intent?.classification==='pass_attempt'&&!['teammate_next_kick','opponent_next_kick'].includes(intent.outcome))attrs.unshift('結果不明');return kickKind(e)+' / '+base+(attrs.length?'（'+attrs.join('・')+'）':'');};
@@ -48,13 +50,15 @@
   }
   function buildArtifactPlayerHistory(data,matchRows){
     if(data.status!=='computed')return [];
-    const appearances=new Map();
-    for(const match of matchRows)for(const player of match.players||[]){const id=player.player_uuid||player.participant_id;if(!id)continue;if(!appearances.has(id))appearances.set(id,[]);appearances.get(id).push({match,player});}
-    return (data.profiles||[]).map(profile=>{
-      const id=profile.player_uuid||profile.uuid||profile.participant_id;
+    const appearances=new Map(), roster=new Map(), aliases=new Map();
+    for(const person of data.roster||[]){const id=person.player_uuid;if(!id)continue;roster.set(id,person);for(const source of person.source_uuids||[])aliases.set(source,id);}
+    const profiles=new Map();for(const profile of data.profiles||[]){const id=profile.player_uuid||profile.uuid||profile.participant_id;if(id){profiles.set(id,profile);if(!roster.has(id))roster.set(id,profile);}}
+    for(const match of matchRows)for(const player of match.players||[]){const source=player.player_uuid||player.participant_id,id=aliases.get(source)||source;if(!id)continue;if(!roster.has(id))roster.set(id,player);if(!appearances.has(id))appearances.set(id,[]);appearances.get(id).push({match,player});}
+    return [...roster].map(([id,person])=>{
+      const profile=profiles.get(id)||{};
       const available=appearances.get(id)||[];
       const rows=available.slice().sort((a,b)=>String(b.match.match_date||'').localeCompare(String(a.match.match_date||''))||String(a.match.match_id).localeCompare(String(b.match.match_id))).slice(0,100);
-      return {id,username:profile.username||id||'選手名不明',team:profile.team,matches:rows.length,
+      return {id,username:rows[0]?.player.username||profile.username||person.username||id||'選手名不明',team:rows[0]?.player.team||profile.team||person.team,head_asset:person.head_asset,matches:rows.length,
         profile,appearances:rows.map(row=>({...row,stats:row.player.analysis||{}}))};
     }).filter(player=>player.id).sort((a,b)=>a.username.localeCompare(b.username,'ja')||a.id.localeCompare(b.id));
   }
@@ -127,6 +131,14 @@
       playerHistoryReady=true;
     })();
     try{await playerHistoryPromise;}finally{playerHistoryPromise=null;}
+  }
+  function loadPlayerStatistics(){
+    if(playerStatistics)return Promise.resolve(playerStatistics);
+    if(!playerStatisticsPromise)playerStatisticsPromise=fetch('player-statistics.json').then(response=>{
+      if(!response.ok)throw Error('HTTP '+response.status);
+      return response.json();
+    }).then(data=>{playerStatistics=data;return data;});
+    return playerStatisticsPromise;
   }
   async function selectMatch(id){
     const summary=matches.find(m=>m.match_id===id);if(!summary)return;
@@ -472,7 +484,7 @@
     return `<details class="reason"><summary>\u524d\u5f8c\u306e\u76e4\u9762\u3068\u4f4d\u7f6e\u306e\u6839\u62e0</summary><p>\u5ea7\u6a19\u306f X, Z \uff08\u30de\u30b9\uff09\u3002\u88dc\u9593\u30fb\u6b20\u6e2c\u3092\u542b\u307f\u3001\u5411\u304d\u306e\u89b3\u6e2c\u6642\u523b\u306f\u4e0d\u660e\u3067\u3059\u3002</p>${sections}</details>`;
   }
   const PASS_EVALUATION_VERSION='pass-evaluation.v2';
-  const hasLaunchEvaluation=version=>/^pass-launch-evaluation\.v1(?:\.[1-5])?$/.test(version||'');
+  const hasLaunchEvaluation=version=>/^pass-launch-evaluation\.v1(?:\.[1-8])?$/.test(version||'');
   const hasPassEvaluation=version=>version===PASS_EVALUATION_VERSION||hasLaunchEvaluation(version);
   const passScoreText=value=>Number.isFinite(value)?(value>=0?'+':'')+value.toFixed(2):'—';
   const passExecutionText=value=>Number.isFinite(value)?value.toFixed(1)+' / 10':'—';
@@ -497,17 +509,21 @@
     const recovered=f.recovered_players||[];
     const ballTiming=f.origin_source==='launch_packet_backprojection'
       ?`打球時点から ${fmt(f.origin_age_ms)}ms後の同じ打球の位置`:`打球前の位置の時差 ${fmt(f.origin_age_ms)}ms`;
-    const labels={base:'基準点',outlet:'味方が届く見込み',head_start:'味方の到達の余裕',penetration:'予測前進',
-      relief:'相手との間合いを広げる価値',shot_access:'攻撃機会を開く価値',interception:'軌道上のカットの余地',
-      danger:'奪われた場合の自陣の危険',boundary:'コート外に出る見込み',range_adjustment:'点数の範囲調整'};
+    const labels={base:'基準点',outlet:'味方が先に扱える見込み',head_start:'味方の到達の余裕',penetration:'予測前進',
+      relief:'相手との間合いを広げる価値',shot_access:'得点機会',interception:'軌道上のカットの余地',
+      danger:'失点可能性',boundary:'コート外に出る見込み',defensive_relief:'自陣の守備に生まれる猶予',
+      direction_cost:'角度を変えた場合の回収しやすさ',range_adjustment:'点数の範囲調整'};
     const list=Object.entries(pass.components||{}).filter(([,value])=>Math.abs(value)>=0.005)
       .map(([key,value])=>`<li><span>${esc(labels[key]||key)}</span><b>${passScoreText(value)}</b></li>`).join('');
     const actual={teammate_next_kick:'味方が次に蹴った',opponent_next_kick:'相手が次に蹴った',self_next_kick:'出し手が続けて蹴った'}[pass.observed_outcome]||'不明';
     const compare=(label,key)=>`<li><span>${label}</span><b>${fmt(f.before[key])} → ${fmt(f.target[key])}マス</b></li>`;
+    const goalFactors=(label,outcome,side,goal)=>outcome&&outcome.branch!=='none'?`<p><b>${label}</b> · ${side}が回収 ${outcome.possession.toFixed(2)} × ${goal}へ進める ${outcome.toward_goal.toFixed(2)} × 進めたときの得点しやすさ ${outcome.goal_if_advanced.toFixed(2)} ＝ 指数 ${outcome.value.toFixed(2)}</p>`:'';
     return `<section class="impact-info pass-evaluation-event">${title}
       <p class="pass-evaluation-total"><strong>${launchScoreText(pass.score)}</strong><span>キック時点の予測</span></p>
       <ul class="pass-evaluation-values">${list}</ul>
       <details open><summary>採点の根拠</summary>
+        ${goalFactors('得点機会',f.scoring_opportunity,'味方','敵陣ゴール')}
+        ${goalFactors('失点可能性',f.concession_risk,'相手','自陣ゴール')}
         ${receiver?`<p>受け手候補 ${esc(name(receiver.player_id))} · 約 ${fmt(receiver.offset_ms)}ms 後</p>
           <p>その地点までの推定到達時間 · 味方 ${fmt(receiver.own_eta_ms)}ms ／ 相手 ${esc(name(receiver.opponent_id))} ${fmt(receiver.opponent_eta_ms)}ms</p>`:
           '<p>予測範囲にボールへ届く味方を確認できませんでした。</p>'}
@@ -516,6 +532,9 @@
         ${runout?`<p><b>ボールがそのまま進んだ場合の自陣リスク</b> · ${early?`約 ${fmt(early.offset_ms)}ms 後に ${esc(name(early.player_id))} が近づける予測ですが、この位置では体で止められる軌道を確認できませんでした。`:''} ボールはそこからさらに ${fmt(runout.extra_retreat_blocks)}マス自陣側へ進む予測。停止地点へは ${esc(name(runout.opponent_id))} が ${esc(name(runout.own_id))} より約 ${fmt(runout.opponent_lead_ms)}ms先着。自陣ゴールまで ${fmt(runout.own_goal_distance)}マス。</p>`:''}
         ${counter?.contest?`<p>競り合い地点ではボールが味方の ${fmt(counter.contest.beyond_teammate_blocks)}マス、相手の ${fmt(counter.contest.beyond_opponent_blocks)}マス敵陣側。相手の追走方向を考慮した自陣への反撃の危険指数 ${fmt(counter.danger_before)} → ${fmt(counter.danger_after)}。${counter.danger_before===counter.danger_after?' 別のカット候補があり、軌道全体では危険が残ります。':''}</p>`:''}
         ${f.boundary_exit?'<p>到達予測の前にコート境界を越える可能性があります。</p>':''}
+        ${f.rebound?`<p>約 ${fmt(f.rebound.offset_ms)}ms 後に壁で反射する仮定を使用。</p>`:''}
+        ${f.open_run_if_received>=0.45?`<p>受け手が回収できれば、ゴール方向に運べる空間が広がる予測。</p>`:''}
+        ${f.direction_alternative?`<p>方向を ${passScoreText(f.direction_alternative.angle_deg)}° 変えると、${esc(name(f.direction_alternative.receiver_id))} が先に扱いやすくなる予測。</p>`:''}
         <ul class="pass-evaluation-values">${compare('相手ゴールまで','goal_distance')}${compare('最寄りの相手まで','opponent_distance')}${compare('ゴールへの線と相手の間隔','lane_clearance')}</ul>
         <p>予測前進 ${passScoreText(f.forward_change_blocks)}マス · 初速 ${fmt(f.launch_speed_blocks_tick)}マス/tick</p>
         <small>ボール位置の根拠は ${esc(source[f.origin_source]||'打球前の位置')}（${ballTiming}）。移動方向を推定できた選手 ${fmt(f.players_with_motion)}人。</small>
@@ -639,19 +658,6 @@
       ${[['pressured','相手が近い'],['unpressured','相手と間合いあり']].map(([key,label])=>`<li><span>${label}</span><b>${launch?launchScoreText(groups[key]?.score_mean):passExecutionText(groups[key]?.execution_mean)} · ${fmt(groups[key]?.count??0)}本</b></li>`).join('')}
     </ul><p>採点 ${fmt(stats?.evaluated_passes??0)} / ${fmt(stats?.attempts??0)} 本</p>`;
   }
-  function combinePassSummaries(rows){
-    const sum=(items,key)=>items.reduce((total,item)=>total+(item?.[key]||0),0);
-    const count=sum(rows,'evaluated_passes');
-    const scoreTotal=rows.reduce((total,item)=>total+(item?.score_sum??(item?.score_mean!=null?item.score_mean*(item.evaluated_passes||0):0)),0);
-    const groups={};
-    for(const key of ['pressured','unpressured']){
-      const entries=rows.map(row=>row.difficulty_groups?.[key]).filter(Boolean);
-      const n=sum(entries,'count');
-      groups[key]={count:n,execution_mean:n?entries.reduce((total,g)=>total+(g.execution_mean||0)*g.count,0)/n:null,
-        score_mean:n?entries.reduce((total,g)=>total+(g.score_mean||0)*g.count,0)/n:null};
-    }
-    return {attempts:sum(rows,'attempts'),evaluated_passes:count,score_mean:count?scoreTotal/count:null,difficulty_groups:groups};
-  }
   function renderMatchRatings(){
     const players=state.match.players||[],evaluation=state.match.analysis?.pass_board_evaluation;
     const byId=new Map((evaluation?.players||[]).map(row=>[row.participant_id,row]));
@@ -713,10 +719,11 @@
       $('#player-list').innerHTML='<p class="empty">\u5de5\u7a0b4\u306e\u9078\u624b\u30d7\u30ed\u30d5\u30a3\u30fc\u30eb\u306f\u672a\u7b97\u51fa\u3067\u3059\u3002</p>';
       renderPlayerProfile(null);return;
     }
-    const rows=playerHistory.filter(player=>player.username.toLocaleLowerCase('ja').includes(query));
+    const rows=playerHistory.filter(player=>player.matches>0&&player.username.toLocaleLowerCase('ja').includes(query));
+    renderPlayerRankings();
     if(!rows.some(player=>player.id===state.profileId))state.profileId=rows[0]?.id||null;
     $('#player-count').textContent=rows.length+'\u4eba';
-    $('#player-list').innerHTML=rows.map(player=>`<button class="directory-player ${player.id===state.profileId?'selected':''}" data-profile="${esc(player.id)}" aria-pressed="${player.id===state.profileId}">${avatar(player.appearances[0]?.player||{username:player.username,team:player.team})}<span><strong>${esc(player.username)}</strong><small>\u76f4\u8fd1 ${player.matches} \u8a66\u5408</small></span><span aria-hidden="true">\u203a</span></button>`).join('')||`<p class="empty">${profileData?'\u5de5\u7a0b4\u306f\u7b97\u51fa\u6e08\u307f\u3067\u3059\u304c\u3001\u5bfe\u8c61\u9078\u624b\u306f\u3044\u307e\u305b\u3093\u3002':'\u8a72\u5f53\u3059\u308b\u9078\u624b\u304c\u3044\u307e\u305b\u3093\u3002'}</p>`;
+    $('#player-list').innerHTML=rows.map(player=>`<button class="directory-player ${player.id===state.profileId?'selected':''}" data-profile="${esc(player.id)}" aria-pressed="${player.id===state.profileId}">${avatar(player.appearances[0]?.player||player)}<span><strong>${esc(player.username)}</strong><small>\u76f4\u8fd1 ${player.matches} \u8a66\u5408</small></span><span aria-hidden="true">\u203a</span></button>`).join('')||`<p class="empty">${profileData?'\u5de5\u7a0b4\u306f\u7b97\u51fa\u6e08\u307f\u3067\u3059\u304c\u3001\u5bfe\u8c61\u9078\u624b\u306f\u3044\u307e\u305b\u3093\u3002':'\u8a72\u5f53\u3059\u308b\u9078\u624b\u304c\u3044\u307e\u305b\u3093\u3002'}</p>`;
     renderPlayerProfile(rows.find(player=>player.id===state.profileId)||null);
   }
   function renderMetricsV2(player){
@@ -827,55 +834,87 @@
     const metricsV2Section=renderMetricsV2(player);
     if(metricsV2Section)host.insertAdjacentHTML('beforeend',metricsV2Section);
   }
-  const recentProfileCache=new Map();
+  const PROFILE_RATE_FIELDS = [
+    ['キック数','kick_count'],['パス数','pass_attempts'],['シュート数','shot_candidates'],
+    ['得点数','goals'],['アシスト数','assist_candidates'],
+    ['ボール奪取数','possession_gain_candidates'],['ボール被奪取数','possession_loss_candidates'],
+  ];
+  const RANKING_TYPES = [
+    ['pass_skill','パス評価ランキング'],
+    ['dribbles','ドリブル頻度ランキング'],
+    ['pass_attempts','パス頻度ランキング'],
+    ['shot_candidates','シュート頻度ランキング'],
+  ];
+  let rankingType = 'pass_skill';
+  const profileStat = (label,value,note='') => `<div class="profile-stat"><span>${label}</span><strong>${value}</strong>${note?`<small>${note}</small>`:''}</div>`;
+  function rateValue(player,key){
+    const rate=player.rates?.[key];
+    return rate?.per_10min??null;
+  }
+  function renderPlayerRankings(){
+    const host=$('#player-ranking');
+    if(!playerStatistics){
+      host.innerHTML='<p class="subtle">ランキングを読み込み中です。</p>';
+      loadPlayerStatistics().then(()=>{if(state.view==='players')renderPlayerRankings();}).catch(()=>{
+        if(state.view==='players')host.innerHTML='<p class="empty">選手統計を読み込めませんでした。</p>';
+      });
+      return;
+    }
+    const value=player=>rankingType==='pass_skill'?player.pass_evaluation?.skill:rateValue(player,rankingType);
+    const ranking=(playerStatistics.players||[]).filter(player=>Number.isFinite(value(player))&&(rankingType==='pass_skill'||player.rates?.[rankingType]?.duration_ms>40*60000))
+      .sort((a,b)=>value(b)-value(a)||String(a.username).localeCompare(String(b.username),'ja'));
+    const title=RANKING_TYPES.find(([id])=>id===rankingType)?.[1]||'ランキング';
+    host.innerHTML=`<div class="ranking-heading"><h3>${title}</h3>
+      <label>ランキング <select id="player-ranking-type" aria-label="ランキングの種類">
+      ${RANKING_TYPES.map(([id,label])=>`<option value="${id}" ${id===rankingType?'selected':''}>${label}</option>`).join('')}
+      </select></label></div>
+      <p class="subtle">${rankingType==='pass_skill'?'採点済みパスが20本以上の選手を表示。':'試合時間10分あたりの候補数。集計対象の参加時間が40分を超える選手を表示。'} 直近最大100試合を集計。</p>
+      ${ranking.length?`<ol class="pass-ranking">${ranking.map((player,index)=>`<li><span class="ranking-position">${index+1}</span><button data-profile="${esc(player.id)}">${avatar(player)}<span class="ranking-name">${esc(player.username)}<small>${rankingType==='pass_skill'?`${fmt(player.pass_evaluation.count)}本`:`${(player.rates[rankingType].duration_ms/60000).toFixed(1)}分`}</small></span><strong>${value(player).toFixed(rankingType==='pass_skill'?2:1)}</strong></button></li>`).join('')}</ol>`:'<p class="empty">条件を満たす選手はいません。</p>'}`;
+    $('#player-ranking-type').onchange=event=>{rankingType=event.target.value;renderPlayerRankings();};
+  }
+  function renderPassHistogram(bins){
+    const max=Math.max(...bins);
+    const description=bins.map((count,i)=>`${i*10}点台 ${count}本`);
+    description[9]=`90〜100点 ${bins[9]}本`;
+    return `<figure class="pass-histogram" role="img" aria-label="パスの点数分布。 ${description.join('、')}">
+      <figcaption>パスの点数分布</figcaption><div class="pass-histogram-chart" aria-hidden="true">
+      <div class="pass-histogram-y"><span>本数</span><span>${fmt(max)}</span><span>0</span></div>
+      <div class="pass-histogram-plot">${bins.map((count,i)=>`<div class="pass-histogram-bin${i<4?' low':''}" title="${description[i]}">
+      <div class="pass-histogram-track"><span style="height:${count*100/max}%"></span></div><small>${i*10}</small></div>`).join('')}
+      <small class="pass-histogram-end">100</small></div></div><div class="pass-histogram-axis" aria-hidden="true">パスの点数（点）</div></figure>`;
+  }
   function renderPlayerProfile(player){
     const host=$('#player-profile-detail');
     if(!player){host.innerHTML='<p class="empty">表示できる選手がいません。</p>';return;}
-    const rows=player.appearances.slice(0,100),key=player.id;
-    if(!recentProfileCache.has(key)){
-      host.innerHTML='<p class="empty">直近の試合を集計中です。</p>';
-      const pending=Promise.allSettled(rows.map(row=>loadMatchDetail(row.match))).then(results=>results.map((result,i)=>result.status==='fulfilled'?result.value:null));
-      recentProfileCache.set(key,pending);
+    if(!playerStatistics){
+      host.innerHTML='<p class="empty">選手統計を読み込み中です。</p>';
+      loadPlayerStatistics().then(()=>{if(state.profileId===player.id&&state.view==='players')renderPlayerProfile(player);}).catch(()=>{
+        if(state.profileId===player.id&&state.view==='players')host.innerHTML='<p class="empty">選手統計を読み込めませんでした。</p>';
+      });
+      return;
     }
-    recentProfileCache.get(key).then(details=>{
-      if(state.profileId!==key||state.view!=='players')return;
-      const loaded=details.filter(Boolean),ratings=[],passByFormat=new Map(),allPassBoards=[];
-      let wins=0,draws=0,losses=0,unknown=0,attempts=0,successes=0,failures=0,passGames=0,goals=0,shots=0,blocks=0,keyPasses=0,goalGames=0,shotGames=0,blockGames=0,keyGames=0;
-      for(const match of loaded){
-        const p=(match.players||[]).find(x=>(x.player_uuid||x.participant_id)===key);if(!p)continue;
-        const side=p.team,opponent=side==='red'?'blue':'red',a=match.score?.[side],b=match.score?.[opponent];
-        if(['red','blue'].includes(side)&&Number.isFinite(a)&&Number.isFinite(b)){if(a>b)wins++;else if(a<b)losses++;else draws++;}else unknown++;
-        const evaluation=match.analysis?.pass_board_evaluation;
-        const board=evaluation?.players?.find(x=>x.participant_id===p.participant_id);
-        if(board&&hasPassEvaluation(evaluation.definition_version)){
-          const format=match.format||'人数形式不明';
-          const launch=hasLaunchEvaluation(evaluation.definition_version),index=JSON.stringify([format,evaluation.definition_version]);
-          if(!passByFormat.has(index))passByFormat.set(index,{format,launch,boards:[]});
-          passByFormat.get(index).boards.push(board);
-          allPassBoards.push(board);
-        }else{
-          const rating=passRating(board);
-          if(rating!=null)ratings.push({rating,count:board.evaluated_passes});
-        }
-        const metric=match.analysis?.pass_metrics?.players?.find(x=>x.participant_id===p.participant_id);
-        if(metric&&Number.isFinite(metric.attempts)&&Number.isFinite(metric.successes)&&Number.isFinite(metric.failures)){attempts+=metric.attempts;successes+=metric.successes;failures+=metric.failures;passGames++;}
-        if(Number.isFinite(metric?.key_passes)){keyPasses+=metric.key_passes;keyGames++;}
-        const stats=p.analysis||{};if(Number.isFinite(stats.goals)){goals+=stats.goals;goalGames++;}if(Number.isFinite(stats.shot_candidates)){shots+=stats.shot_candidates;shotGames++;}if(Number.isFinite(stats.body_block_candidates)){blocks+=stats.body_block_candidates;blockGames++;}
-      }
-      const known=wins+draws+losses,ratedPasses=ratings.reduce((sum,r)=>sum+r.count,0),average=ratedPasses?ratings.reduce((sum,r)=>sum+r.rating*r.count,0)/ratedPasses:null;
-      const values=[average,6,6,6,6],labels=['パス','シュート','ドリブル','ディフェンス','ポジショニング'];
-      const point=(i,value)=>{const angle=-Math.PI/2+i*2*Math.PI/5,r=65*value/10;return `${(100+Math.cos(angle)*r).toFixed(1)},${(85+Math.sin(angle)*r).toFixed(1)}`;};
-      const polygon=vs=>vs.map((v,i)=>point(i,v)).join(' ');
-      const grid=[2,4,6,8,10].map(n=>`<polygon points="${polygon([n,n,n,n,n])}" fill="none" stroke="#50616a" stroke-width=".6"/>`).join('');
-      const shape=average==null?'':`<polygon points="${polygon(values)}" fill="#91ce8b" fill-opacity=".35" stroke="#a8e49d" stroke-width="2"/>`;
-      const stat=(label,value,note)=>`<div class="profile-stat"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`;
-      const allPassSummary=allPassBoards.length?combinePassSummaries(allPassBoards):null;
-      const anyLaunch=allPassBoards.some(b=>hasLaunchEvaluation(b.definition_version||''))||[...passByFormat.values()].some(g=>g.launch);
-      const allFormatCard=(allPassBoards.length>0&&passByFormat.size>1)?`<article class="match-rating-card"><h5>全形式通算 · ${allPassBoards.length}試合</h5>${passSummaryValues(allPassSummary,anyLaunch)}</article>`:'';
-      const passProfile=passByFormat.size?`<section class="profile-section"><h4>人数形式別のパス評価</h4><div class="match-rating-grid">${allFormatCard}${[...passByFormat].sort().map(([, {format,launch,boards}])=>`<article class="match-rating-card"><h5>${esc(format)} · ${boards.length}試合</h5>${passSummaryValues(combinePassSummaries(boards),launch)}</article>`).join('')}</div></section>`:'';
-      const ratingSection=passProfile||`<section class="profile-section"><h4>試合評価の平均</h4><div class="match-rating-card"><header><div><strong>直近の平均評価</strong><small>パスは各試合の評価を評価対象のパス数で加重平均</small></div><div class="match-rating-total"><b>${loaded.length?'6.0':'—'}</b><small>総合平均（仮）</small></div></header><div class="match-rating-body"><svg viewBox="0 0 200 170" role="img" aria-label="試合評価の平均グラフ">${grid}${shape}</svg><div class="match-rating-values">${labels.map((label,i)=>`<div><span>${label}${i?'（仮）':''}</span><b>${values[i]==null?'—':values[i].toFixed(1)}</b></div>`).join('')}</div></div><p>パス評価対象 ${ratings.length} / ${loaded.length} 試合 · ${ratedPasses}本 · 総合とパス以外の4項目は各試合とも仮の6点</p></div></section>`;
-      host.innerHTML=`<div class="profile-header">${avatar(rows[0]?.player||{username:player.username,team:player.team})}<div><span class="eyebrow">PLAYER PROFILE</span><h3>${esc(player.username)}</h3><p class="subtle">直近 ${rows.length} 試合 · 読込 ${loaded.length} 試合${loaded.length<rows.length?' · 一部の試合を読み込めませんでした':''}</p></div></div>${ratingSection}<section class="profile-section"><h4>直近の試合統計</h4><div class="profile-stats-grid">${stat('勝率',known?Math.round(100*wins/known)+'%':'—',`${wins}勝 ${draws}分 ${losses}敗 · 結果不明 ${unknown}試合`)}${allPassSummary?.score_mean!=null?stat('パス評価',anyLaunch?launchScoreText(allPassSummary.score_mean):passScoreText(allPassSummary.score_mean),`採点 ${allPassSummary.evaluated_passes}本 / 試行 ${allPassSummary.attempts}本 · ${allPassBoards.length}試合`):''}${allPassSummary?.difficulty_groups?.pressured?.score_mean!=null?stat('近接相手時パス評価',anyLaunch?launchScoreText(allPassSummary.difficulty_groups.pressured.score_mean):passExecutionText(allPassSummary.difficulty_groups.pressured.execution_mean),`${allPassSummary.difficulty_groups.pressured.count}本 · 4.5マス以内`):''}${stat('パス成功率',successes+failures?Math.round(100*successes/(successes+failures))+'%':'—',`${successes}成功 / 判定可能 ${successes+failures}本 · 試行 ${attempts}本 · ${passGames}試合`)}${stat('得点',goalGames?fmt(goals):'—',`集計 ${goalGames}試合`)}${stat('シュート候補',shotGames?fmt(shots):'—',`集計 ${shotGames}試合`)}${stat('キーパス候補',keyGames?fmt(keyPasses):'—',`集計 ${keyGames}試合`)}${stat('体ブロック候補',blockGames?fmt(blocks):'—',`集計 ${blockGames}試合`)}</div><p class="subtle">勝率は勝敗が分かる試合が分母です。パス評価はキック時点の配置・初速からの0〜100点評価（近接相手時は最寄り相手4.5マス以内）です。パス成功率は成功・失敗を判定できた試行が分母です。候補の項目は推定値です。</p></section>`;
-    }).catch(()=>{if(state.profileId===key&&state.view==='players')host.innerHTML='<p class="empty">試合データを読み込めませんでした。</p>';});
+    const stats=(playerStatistics.players||[]).find(row=>row.id===player.id);
+    if(!stats){host.innerHTML='<p class="empty">この選手の集計データがありません。</p>';return;}
+    const rates=PROFILE_RATE_FIELDS.map(([label,key])=>{
+      const item=stats.rates[key],value=rateValue(stats,key);
+      return profileStat(label,value==null?'—':value.toFixed(1),value==null?'集計できる試合時間なし':`${fmt(item.count)} 回 / ${(item.duration_ms/60000).toFixed(1)} 分`);
+    }).join('');
+    const evaluation=stats.pass_evaluation, totals=stats.pass_totals, judged=totals.successes+totals.failures;
+    const lowRate=evaluation.low_rate;
+    host.innerHTML=`<div class="profile-header">${avatar(player.appearances[0]?.player||stats)}<div><h3>${esc(player.username)}</h3>
+      <p class="subtle">直近 ${stats.matches} 試合</p></div></div>
+      <section class="profile-section player-overview"><h4>試合統計</h4>
+      <div class="profile-stats-grid">${profileStat('勝利数',stats.known_results?`${fmt(stats.wins)} 勝`:'—',`結果判明 ${fmt(stats.known_results)} 試合`)}</div>
+      <h5>参加時間10分あたり</h5><div class="profile-stats-grid">${rates}</div>
+      <p class="subtle">参加試合の試合時間の合計 ${(stats.duration_ms/60000).toFixed(1)} 分。各項目は件数と試合時間が分かる試合で換算しています。得点以外の件数には推定が含まれます。</p></section>
+      <section class="profile-section"><h4>パス</h4><div class="profile-stats-grid">
+      ${profileStat('パスのうまさ',evaluation.skill==null?'—':`${evaluation.skill.toFixed(2)} / 10`,evaluation.count<20?'採点20本以上で表示':'')}
+      ${profileStat('パス平均点',launchScoreText(evaluation.average),`採点 ${fmt(evaluation.count)} / ${fmt(totals.evaluationAttempts)} 本`)}
+      ${profileStat('不安定指数',evaluation.instability==null?'—':evaluation.instability.toFixed(3),'0〜1 · 低いほど安定')}
+      ${profileStat('致命的なミスパスの割合',lowRate==null?'—':`${(100*lowRate).toFixed(1)}%`,`40点未満 · ${fmt(evaluation.low_count)} / ${fmt(evaluation.count)} 本`)}
+      ${profileStat('パス成功率',totals.success_rate==null?'—':`${(100*totals.success_rate).toFixed(1)}%`,`${fmt(totals.successes)} 成功 / ${fmt(judged)} 本判定 · ${fmt(totals.attempts)} 本試行`)}
+      </div>${evaluation.count?renderPassHistogram(evaluation.bins):'<p class="empty">点数が記録されたパスがありません。</p>'}
+      <p class="subtle">不安定指数は、40点未満のパスごとに (40−点数)÷40 を足し、採点した全パス数で割ります。パスのうまさは平均点÷10から不安定指数の6倍を差し引いた暫定評価です。最低は0点です。</p></section>`;
   }
   function renderLegacyPlayerProfile(player){
     if(profileData){renderArtifactPlayerProfile(player);return;}
