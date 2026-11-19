@@ -4,6 +4,7 @@
   const stage=Number(window.PR11_SITE_STAGE||3), stage2=stage===2;
   const matches=[...(window.PR11_SITE_DATA||[])].sort((a,b)=>String(b.match_date||'').localeCompare(String(a.match_date||'')));
   let profileData=window.PR11_PROFILE_DATA||null;
+  const artifactProfileCache=new Map();
   let playerStatistics=window.PR11_PLAYER_STATISTICS||null;
   let playerStatisticsPromise=null;
   const profileDataUrl=window.PR11_PROFILE_DATA_URL||null;
@@ -59,7 +60,7 @@
       const available=appearances.get(id)||[];
       const rows=available.slice().sort((a,b)=>String(b.match.match_date||'').localeCompare(String(a.match.match_date||''))||String(a.match.match_id).localeCompare(String(b.match.match_id))).slice(0,100);
       return {id,username:rows[0]?.player.username||profile.username||person.username||id||'選手名不明',team:rows[0]?.player.team||profile.team||person.team,head_asset:person.head_asset,matches:rows.length,
-        profile,appearances:rows.map(row=>({...row,stats:row.player.analysis||{}}))};
+        profile_url:profile.profile_url||null,profile:null,appearances:rows.map(row=>({...row,stats:row.player.analysis||{}}))};
     }).filter(player=>player.id).sort((a,b)=>a.username.localeCompare(b.username,'ja')||a.id.localeCompare(b.id));
   }
   const playerByName=n=>state.match?.players.find(p=>p.username===n);
@@ -131,6 +132,26 @@
       playerHistoryReady=true;
     })();
     try{await playerHistoryPromise;}finally{playerHistoryPromise=null;}
+  }
+  async function loadArtifactProfile(player){
+    if(player.profile)return player.profile;
+    if(!player.profile_url)throw Error('Profile file is unavailable');
+    if(!artifactProfileCache.has(player.id))artifactProfileCache.set(player.id,fetch(player.profile_url).then(response=>{
+      if(!response.ok)throw Error('HTTP '+response.status);
+      return response.json();
+    }));
+    try{player.profile=await artifactProfileCache.get(player.id);}catch(error){artifactProfileCache.delete(player.id);throw error;}
+    return player.profile;
+  }
+  async function loadArtifactMetrics(player){
+    if(player.metrics)return player.metrics;
+    if(!player.metrics_url)throw Error('Metrics file is unavailable');
+    if(!artifactProfileCache.has(player.id+':metrics'))artifactProfileCache.set(player.id+':metrics',fetch(player.metrics_url).then(response=>{
+      if(!response.ok)throw Error('HTTP '+response.status);
+      return response.json();
+    }));
+    try{player.metrics=await artifactProfileCache.get(player.id+':metrics');}catch(error){artifactProfileCache.delete(player.id+':metrics');throw error;}
+    return player.metrics;
   }
   function loadPlayerStatistics(){
     if(playerStatistics)return Promise.resolve(playerStatistics);
@@ -831,8 +852,26 @@
     const start=profile.window_start_utc?date({match_date:profile.window_start_utc}):'\u65e5\u6642\u4e0d\u660e',end=profile.window_end_utc?date({match_date:profile.window_end_utc}):'\u65e5\u6642\u4e0d\u660e';
     const warning=profile.small_sample||profile.status_confidence==='insufficient'||profile.sample_warning;
     host.innerHTML=`<div class="profile-header">${avatar(avatarPlayer)}<div><span class="eyebrow">PLAYER PROFILE</span><h3>${esc(player.username)}</h3><p class="subtle">\u76f4\u8fd1 ${fmt(sampleCount)} / ${fmt(available??sampleCount)} \u8a66\u5408 \xb7 ${esc(start)} \u301c ${esc(end)}</p></div></div><section class="profile-section"><h4>\u6307\u6a19\uff08\u5272\u5408\u4e2d\u5fc3\uff09</h4><p class="subtle">\u5272\u5408\u3068\u5206\u6bcd\u3092\u4e26\u3079\u3066\u8868\u793a\u3057\u307e\u3059\u3002\u5019\u88dc\u30a4\u30d9\u30f3\u30c8\u306f\u6210\u529f\u3092\u610f\u5473\u3057\u307e\u305b\u3093\u3002</p>${indicatorRows||'<p class="empty">\u8868\u793a\u3067\u304d\u308b\u5272\u5408\u6307\u6a19\u304c\u3042\u308a\u307e\u305b\u3093\u3002</p>'}</section><section class="profile-section"><h4>\u96c6\u8a08\u7bc4\u56f2</h4><p class="subtle">${esc(profile.sample_warning||'')} ${warning?'\u5c0f\u3055\u306a\u30b5\u30f3\u30d7\u30eb\u306e\u305f\u3081\u53c2\u8003\u5024\u3068\u3057\u3066\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002':'\u6307\u5b9a\u7bc4\u56f2\u306e\u51fa\u5834\u8a18\u9332\u3092\u96c6\u8a08\u3057\u3066\u3044\u307e\u3059\u3002'}</p><p class="subtle">\u5bfe\u8c61\u8a66\u5408ID: ${esc((profile.window_match_ids||[]).join(', ')||'\u4e0d\u660e')}</p></section>`;
-    const metricsV2Section=renderMetricsV2(player);
-    if(metricsV2Section)host.insertAdjacentHTML('beforeend',metricsV2Section);
+    if(player.metrics_url){
+      host.insertAdjacentHTML('beforeend','<details class="profile-section metrics-v2-lazy"><summary>選手の詳細指標（工程3）を表示</summary><div class="metrics-v2-content"><p class="subtle">開くと詳細指標データを読み込みます。</p></div></details>');
+      const details=host.querySelector('.metrics-v2-lazy');
+      details.addEventListener('toggle',()=>{
+        if(!details.open||details.dataset.loaded||details.dataset.loading)return;
+        details.dataset.loading='true';
+        loadArtifactMetrics(player).then(metrics=>{
+          Object.assign(player,metrics);
+          const content=details.querySelector('.metrics-v2-content');
+          content.innerHTML=renderMetricsV2(player)||'<p class="empty">この選手の詳細指標は未算出です。</p>';
+          details.dataset.loaded='true';delete details.dataset.loading;
+        }).catch(()=>{
+          details.querySelector('.metrics-v2-content').innerHTML='<p class="empty">詳細指標を読み込めませんでした。</p>';
+          delete details.dataset.loading;
+        });
+      });
+    }else{
+      const metricsV2Section=renderMetricsV2(player);
+      if(metricsV2Section)host.insertAdjacentHTML('beforeend',metricsV2Section);
+    }
   }
   const PROFILE_RATE_FIELDS = [
     ['キック数','kick_count'],['パス数','pass_attempts'],['シュート数','shot_candidates'],
@@ -886,6 +925,13 @@
   function renderPlayerProfile(player){
     const host=$('#player-profile-detail');
     if(!player){host.innerHTML='<p class="empty">表示できる選手がいません。</p>';return;}
+    if(profileData&&!player.profile){
+      host.innerHTML='<p class="empty">選手プロフィールを読み込み中です。</p>';
+      loadArtifactProfile(player).then(()=>{if(state.profileId===player.id&&state.view==='players')renderPlayerProfile(player);}).catch(()=>{
+        if(state.profileId===player.id&&state.view==='players')host.innerHTML='<p class="empty">選手プロフィールを読み込めませんでした。</p>';
+      });
+      return;
+    }
     if(!playerStatistics){
       host.innerHTML='<p class="empty">選手統計を読み込み中です。</p>';
       loadPlayerStatistics().then(()=>{if(state.profileId===player.id&&state.view==='players')renderPlayerProfile(player);}).catch(()=>{
